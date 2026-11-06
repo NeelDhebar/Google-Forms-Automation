@@ -5,23 +5,53 @@ Form: "Analysing Consumer Awareness, Preference and Perception
        Towards Frido's Ergonomic Lifestyle Products" (Ahmedabad University)
 URL : https://forms.gle/iVpffvxRmVHuLL2cA
 
-Question map
-------------
-Q0  (index 0)  — Are you aware of the brand "Frido"?           [radio, 3 opts]
-Q1  (index 1)  — Do you know about Ergonomic Lifestyle Products?[radio, 3 opts]
-Q2  (index 2)  — Where did you first hear about Frido?         [radio, 15 opts]
-Q3  (index 3)  — Which Frido product categories are you aware? [checkbox, 6 opts]
-Q4  (index 4)  — Aware of specific health benefits?            [radio, 3 opts]
-Q5  (index 5)  — Which product category prefer purchasing?     [radio, 5 opts]
-Q6  (index 6)  — What primary purpose drives interest?         [radio, 5 opts]
-Q7  (index 7)  — Preferred budget per ergonomic product?       [radio, 4 opts]
-Q8  (index 8)  — Rank product attributes (Q9 in form)          [grid 5×5]
-Q9  (index 9)  — Rank product offerings  (Q10 in form)         [grid 5×5]
-Q10 (index 10) — Perception Likert scale (30 statements×5)    [likert grid]
-Q11 (index 11) — Age                                           [radio, 4 opts]
-Q12 (index 12) — Gender                                        [radio, 4 opts]
-Q13 (index 13) — Annual income bracket                         [radio, 4 opts]
-Q14 (index 14) — Highest education level                       [radio, 4 opts]
+IMPORTANT: This form loads ALL questions on a single page (no pagination).
+All 15 questions are rendered at once with "Next" buttons for visual sections.
+
+DOM structure (from debug):
+- 15 question blocks found via div[data-params]
+- 439 total [role="radio"] elements
+- 21 total [role="checkbox"] elements (Q2=15 checkboxes, Q3=6 checkboxes)
+- Radios have data-value and aria-label attributes
+- Checkboxes have aria-label attributes
+
+Question map (flat radio/checkbox indices)
+------------------------------------------
+Q0  — Are you aware of "Frido"?                    [radio 0-2: Yes/No/Don't Know]
+Q1  — Know Ergonomic Products?                     [radio 3-5: Yes/No/Don't Know]
+Q2  — Where first heard about Frido?               [checkbox 0-14: 15 source options]
+Q3  — Product categories aware of?                 [checkbox 15-20: 6 options]
+Q4  — Aware of health benefits?                    [radio 6-8: Yes/No/Don't Know]
+Q5  — Preferred product category?                  [radio 9-13: 5 options]
+Q6  — Primary purpose?                             [radio 14-18: 5 options]
+Q7  — Budget?                                      [radio 19-22: 4 options]
+Q8  — Rank product attributes                      [radio 23-47: 5 rows × 5 cols = 25]
+Q9  — Rank product offerings                       [radio 48-72: 5 rows × 5 cols = 25]
+Q10 — Perception Likert (30 statements)            [radio 73-222: 30 rows × 5 cols = 150]
+      (Wait — debug says 300 radios! That's 30 statements BUT the form may
+       have sub-rows or SD/D/N/A/SA rendered twice. Debug showed total=439.
+       23+25+25+150=223 before Q10. 439-9-5-5-4 = 416 for grids+likert.)
+
+Actually: let's just use flat indices from the debug output:
+  Q0: radio[0..2]     3 radios
+  Q1: radio[3..5]     3 radios
+  Q4: radio[6..8]     3 radios
+  Q5: radio[9..13]    5 radios
+  Q6: radio[14..18]   5 radios
+  Q7: radio[19..22]   4 radios
+  Q8: radio[23..47]   25 radios (5×5 grid)
+  Q9: radio[48..72]   25 radios (5×5 grid)
+  Q10: radio[73..222] 150 radios (30×5) — WAIT debug says 300 in listitem[31]
+       Let's recalc: 3+3+3+5+5+4+25+25 = 73. 439-73 = 366 for Q10+Q11-Q14.
+       Q11-Q14: 4+4+4+4=16. So Q10 = 439-73-16 = 350 radios.
+       But 30 statements × 5 cols = 150. Debug says listitem[31] has 300 radios.
+       This means 300/5 = 60 rows, not 30 — maybe each statement is split into
+       sub-question rows. Or 300/30 = 10 cols? Doesn't matter — we'll handle it
+       dynamically.
+  Q11: last 16 radios → Q11=4, Q12=4, Q13=4, Q14=4
+
+For the safest approach, we use div[data-params] to get 15 question blocks,
+then click radios/checkboxes WITHIN each block.
 """
 
 import json
@@ -40,23 +70,19 @@ HEADLESS      = os.environ.get("HEADLESS", "false").lower() == "true"
 SLOW_MO       = int(os.environ.get("SLOW_MO", "120"))
 DEFAULTS_FILE = Path(__file__).parent / "defaults.json"
 
-# ── Form-specific answer pools ────────────────────────────────────────────────
+# ── Option labels per question (order must match the form) ────────────────────
 
-ANSWER_POOLS = {
-    # Q0 — Aware of Frido?
+Q_OPTIONS = {
     0: ["Yes", "No", "Don't Know"],
-    # Q1 — Know Ergonomic products?
     1: ["Yes", "No", "Don't Know"],
-    # Q2 — Where first heard
-    2: [
+    2: [  # checkboxes — pick 1 or more
         "Instagram", "Facebook", "YouTube Video Ads", "Google Search Results",
         "Amazon Product Listings", "Flipkart Store Pages", "Friend Recommendation",
         "Family Recommendation", "Workplace Colleague", "Doctor Recommendation",
         "Physiotherapist Advice", "Online Health Blogs", "Influencer Reviews",
         "Newspaper Feature", "Retail Store Display",
     ],
-    # Q3 — Product categories aware of (checkboxes)
-    3: [
+    3: [  # checkboxes — pick 1 or more
         "Seat Cushions & Lumbar Back Supports",
         "Orthotic Insoles & Footwear",
         "Ergonomic Office Chairs",
@@ -64,9 +90,7 @@ ANSWER_POOLS = {
         "Joint Support Braces",
         "None of the above",
     ],
-    # Q4 — Aware of health benefits?
     4: ["Yes", "No", "Don't Know"],
-    # Q5 — Preferred product category
     5: [
         "Ergonomic Seat & Back Cushions",
         "Orthotic Footwear & Insoles",
@@ -74,7 +98,6 @@ ANSWER_POOLS = {
         "Ergonomic Office Chairs",
         "Posture Correction Support Accessories",
     ],
-    # Q6 — Primary purpose
     6: [
         "Relieving existing physical discomfort",
         "Posture correction long-term spinal care",
@@ -82,63 +105,35 @@ ANSWER_POOLS = {
         "Medical professional advice recommendation",
         "Everyday personal physical wellness",
     ],
-    # Q7 — Budget
     7: [
-        "Below ₹1,000",
-        "₹1,000 – ₹2,500",
-        "₹2,500 – ₹5,000",
-        "Above ₹5,000",
+        "Below ₹1,000", "₹1,000 – ₹2,500",
+        "₹2,500 – ₹5,000", "Above ₹5,000",
     ],
-    # Q8 — Rank product attributes (grid 5 rows × cols 1-5)
-    # Stored as list of [row_label, column_value] — randomized per row
-    8: {
-        "type": "ranking_grid",
-        "rows": [
-            "Ergonomic Design & Body Alignment Contour",
-            "Material Quality & Product Durability",
-            "Pricing Affordability & Value Ratio",
-            "Medical Credibility & Orthopedic Testing",
-            "Brand Reputation & Verified Reviews",
-        ],
-        "cols": ["1", "2", "3", "4", "5"],
-    },
-    # Q9 — Rank product offerings (grid 5 rows × cols 1-5)
-    9: {
-        "type": "ranking_grid",
-        "rows": [
-            "Desk Seating Memory Foam Support Cushions",
-            "Customizable Arch Support Orthotic Foot Insoles",
-            "Contoured Spinal Cervical Sleep Pillows",
-            "Adjustable Lumbar Workstation Office Chairs",
-            "Portable Travel Posture Support Cushions",
-        ],
-        "cols": ["1", "2", "3", "4", "5"],
-    },
-    # Q10 — Likert scale (30 statements × 5 options SD-SA)
-    10: {
-        "type": "likert_grid",
-        "cols": ["SD", "D", "N", "A", "SA"],
-        "num_rows": 30,
-    },
-    # Q11 — Age
+    # 8, 9, 10 are grids — handled separately
     11: ["18–25 years", "26–35 years", "36–50 years", "Above 50 years"],
-    # Q12 — Gender
     12: ["Male", "Female", "Prefer not to say", "Other"],
-    # Q13 — Annual income
     13: [
-        "Below ₹3,00,000",
-        "₹3,00,000 – ₹9,00,000",
-        "₹9,00,001 – ₹15,00,000",
-        "Above ₹15,00,000",
+        "Below ₹3,00,000", "₹3,00,000 – ₹9,00,000",
+        "₹9,00,001 – ₹15,00,000", "Above ₹15,00,000",
     ],
-    # Q14 — Education
-    14: [
-        "High School",
-        "Bachelor's Degree",
-        "Master's Degree",
-        "Doctorate / Professional",
-    ],
+    14: ["High School", "Bachelor's Degree", "Master's Degree", "Doctorate / Professional"],
 }
+
+# Question types: maps question index → "radio", "checkbox", or "grid"
+Q_TYPES = {
+    0: "radio", 1: "radio", 2: "checkbox", 3: "checkbox", 4: "radio",
+    5: "radio", 6: "radio", 7: "radio",
+    8: "grid", 9: "grid", 10: "grid",
+    11: "radio", 12: "radio", 13: "radio", 14: "radio",
+}
+
+# Grid dimensions
+GRID_INFO = {
+    8:  {"rows": 5,  "cols": 5},
+    9:  {"rows": 5,  "cols": 5},
+    10: {"rows": 30, "cols": 5},   # actual DOM may have more — we handle dynamically
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -150,371 +145,276 @@ def load_defaults() -> dict:
     return {}
 
 
-def pick_radio_option(page: Page, options: Locator, want: str | None) -> None:
-    """Click a radio option — by label match if want is given, else random.
-
-    Tries multiple strategies to read the option label since Google Forms
-    nests the text several DOM levels away from the [role="radio"] element.
-    """
-    count = options.count()
-    if count == 0:
-        return
-
-    if want:
-        for i in range(count):
-            opt = options.nth(i)
-            label = ""
-
-            # Strategy 1: aria-label attribute on the radio element itself
-            try:
-                label = opt.get_attribute("aria-label") or ""
-            except Exception:
-                pass
-
-            # Strategy 2: data-value attribute
-            if not label:
-                try:
-                    label = opt.get_attribute("data-value") or ""
-                except Exception:
-                    pass
-
-            # Strategy 3: walk up ancestors (parent → grandparent → great-grandparent)
-            for xpath in ("xpath=..", "xpath=../..", "xpath=../../.."):
-                if label:
-                    break
-                try:
-                    label = opt.locator(xpath).inner_text(timeout=1000).strip()
-                except Exception:
-                    pass
-
-            if want.lower() in label.lower():
-                opt.click()
-                return
-
-        print(f"    ⚠  '{want}' not found in radio labels; randomizing.")
-
-    options.nth(random.randint(0, count - 1)).click()
-
-
-def fill_ranking_grid(page: Page, grid_el: Locator, default_rows: dict | None) -> None:
-    """
-    Fill a 5×5 ranking grid.
-    Each row gets a unique rank from 1-5 (a random permutation).
-    default_rows: optional dict mapping row-index (str) → column value (str "1"–"5")
-    """
-    rows = grid_el.locator('[role="row"]')
-    row_count = rows.count()
-    if row_count == 0:
-        # Fallback: try to find radio buttons inside the grid
-        radios = grid_el.locator('[role="radio"]')
-        total  = radios.count()
-        # Assume 5 cols
-        cols   = 5
-        for r in range(total // cols):
-            choice = random.randint(0, cols - 1)
-            radios.nth(r * cols + choice).click()
-            page.wait_for_timeout(100)
-        return
-
-    perm = list(range(5))
-    random.shuffle(perm)      # unique rank assignment per row
-
-    for r in range(row_count):
-        row_el = rows.nth(r)
-        # Skip header row
-        if row_el.locator('[role="columnheader"]').count() > 0:
-            continue
-        cells = row_el.locator('[role="gridcell"]')
-        cell_count = cells.count()
-        if cell_count == 0:
-            continue
-
-        # Determine which column to pick
-        col_idx = perm[r % len(perm)]
-        col_idx = min(col_idx, cell_count - 1)
-
-        # Check default for this row
-        if default_rows and str(r) in default_rows:
-            try:
-                col_idx = int(default_rows[str(r)]) - 1
-            except (ValueError, TypeError):
-                pass
-
-        radio = cells.nth(col_idx).locator('[role="radio"]')
-        if radio.count() > 0:
-            radio.first.click()
-        else:
-            cells.nth(col_idx).click()
-        page.wait_for_timeout(80)
-
-
-def fill_likert_grid(page: Page, grid_el: Locator, default_col: str | None) -> None:
-    """
-    Fill a Likert-scale grid (30 rows × 5 cols).
-    Each row gets a random column unless default_col is given (SD/D/N/A/SA).
-    """
-    rows = grid_el.locator('[role="row"]')
-    row_count = rows.count()
-
-    # Map text → index
-    likert_map = {"SD": 0, "D": 1, "N": 2, "A": 3, "SA": 4}
-    default_idx = likert_map.get((default_col or "").upper())
-
-    for r in range(row_count):
-        row_el = rows.nth(r)
-        if row_el.locator('[role="columnheader"]').count() > 0:
-            continue
-        cells = row_el.locator('[role="gridcell"]')
-        cell_count = cells.count()
-        if cell_count == 0:
-            continue
-
-        col_idx = default_idx if default_idx is not None else random.randint(0, cell_count - 1)
-        col_idx = min(col_idx, cell_count - 1)
-
-        radio = cells.nth(col_idx).locator('[role="radio"]')
-        if radio.count() > 0:
-            radio.first.click()
-        else:
-            cells.nth(col_idx).click()
-        page.wait_for_timeout(60)
-
-
-# ── Form Filler ───────────────────────────────────────────────────────────────
-
-def fill_all_questions(page: Page, defaults: dict) -> None:
-    """Fill the entire form (all sections) using the known question map."""
-
-    page.wait_for_load_state("networkidle", timeout=20_000)
-    page.wait_for_timeout(1000)
-
-    # ── SECTION A ─────────────────────────────────────────────────────────────
-    # Questions 0-4 appear on page 1; page-relative indices are 0,1,2,3,4
-    print("\n  ── Section A: Awareness ──")
-
-    _answer_radio(page, 0, defaults, page_idx=0)    # Q0
-    _answer_radio(page, 1, defaults, page_idx=1)    # Q1
-    _answer_radio(page, 2, defaults, page_idx=2)    # Q2
-    _answer_checkbox(page, 3, defaults, page_idx=3) # Q3
-    _answer_radio(page, 4, defaults, page_idx=4)    # Q4
-
-    _click_next(page)
-
-    # ── SECTION B ─────────────────────────────────────────────────────────────
-    # Questions 5-9 appear on page 2; page-relative indices restart at 0
-    print("\n  ── Section B: Preference ──")
-
-    _answer_radio(page, 5, defaults, page_idx=0)    # Q5
-    _answer_radio(page, 6, defaults, page_idx=1)    # Q6
-    _answer_radio(page, 7, defaults, page_idx=2)    # Q7
-    _answer_grid(page, 8, defaults, page_idx=3)     # Q8 — ranking grid
-    _answer_grid(page, 9, defaults, page_idx=4)     # Q9 — ranking grid
-
-    _click_next(page)
-
-    # ── SECTION C ─────────────────────────────────────────────────────────────
-    # Question 10 is the only one on page 3; page-relative index = 0
-    print("\n  ── Section C: Perception Likert ──")
-
-    _answer_likert(page, 10, defaults, page_idx=0)  # Q10
-
-    _click_next(page)
-
-    # ── SECTION D ─────────────────────────────────────────────────────────────
-    # Questions 11-14 appear on page 4; page-relative indices 0-3
-    print("\n  ── Section D: Demographics ──")
-
-    _answer_radio(page, 11, defaults, page_idx=0)   # Q11
-    _answer_radio(page, 12, defaults, page_idx=1)   # Q12
-    _answer_radio(page, 13, defaults, page_idx=2)   # Q13
-    _answer_radio(page, 14, defaults, page_idx=3)   # Q14
-
-    _click_submit(page)
-
-
-# ── Per-question helpers ──────────────────────────────────────────────────────
-
 def _resolve(q_idx: int, defaults: dict):
-    """Return (answer, force_random) from defaults, or (None, False)."""
+    """Return the configured answer from defaults, or None."""
     entry = defaults.get(str(q_idx), {})
     if not isinstance(entry, dict):
-        return entry, False
-    force_random = entry.get("randomize", False)
-    answer = None if force_random else entry.get("answer")
-    return answer, force_random
+        return entry
+    if entry.get("randomize", False):
+        return None
+    return entry.get("answer")
 
 
-def _answer_radio(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
-    answer, _ = _resolve(q_idx, defaults)
-    pool = ANSWER_POOLS.get(q_idx, [])
-    want = answer if answer else (random.choice(pool) if pool else None)
-    print(f"    Q{q_idx} [radio]: {want}")
-
-    q_block = _get_question_block(page, page_idx)
-    if q_block is None:
-        print(f"    ⚠  Could not locate Q{q_idx} block.")
-        return
-
-    radios = q_block.locator('[role="radio"]')
-    pick_radio_option(page, radios, want)
-    page.wait_for_timeout(150)
-
-
-def _answer_checkbox(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
-    answer, _ = _resolve(q_idx, defaults)
-    pool = ANSWER_POOLS.get(q_idx, [])
-
-    # Determine which options to tick
-    if answer:
-        chosen = answer if isinstance(answer, list) else [answer]
-    else:
-        # Avoid picking "None of the above" together with real options
-        real_opts = [o for o in pool if "none" not in o.lower()]
-        num = random.randint(1, min(3, len(real_opts)))
-        chosen = random.sample(real_opts, num)
-
-    print(f"    Q{q_idx} [checkbox]: {chosen}")
-
-    q_block = _get_question_block(page, page_idx)
-    if q_block is None:
-        print(f"    ⚠  Could not locate Q{q_idx} block.")
-        return
-
-    checkboxes = q_block.locator('[role="checkbox"]')
-    count = checkboxes.count()
-    for i in range(count):
-        cb = checkboxes.nth(i)
-        label = ""
-        # Try aria-label, data-value, then ancestor text (same as radio logic)
-        try:
-            label = cb.get_attribute("aria-label") or ""
-        except Exception:
-            pass
-        if not label:
-            try:
-                label = cb.get_attribute("data-value") or ""
-            except Exception:
-                pass
-        for xpath in ("xpath=..", "xpath=../..", "xpath=../../.."):
-            if label:
-                break
-            try:
-                label = cb.locator(xpath).inner_text(timeout=1000).strip()
-            except Exception:
-                pass
-        if any(c.lower() in label.lower() for c in chosen):
-            checkboxes.nth(i).click()
-            page.wait_for_timeout(100)
-
-
-def _answer_grid(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
-    """Fill a ranking grid question."""
-    answer, _ = _resolve(q_idx, defaults)
-    print(f"    Q{q_idx} [ranking grid]: randomized per row")
-
-    q_block = _get_question_block(page, page_idx)
-    if q_block is None:
-        print(f"    ⚠  Could not locate Q{q_idx} block.")
-        return
-
-    default_rows = answer if isinstance(answer, dict) else None
-    fill_ranking_grid(page, q_block, default_rows)
-
-
-def _answer_likert(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
-    """Fill the 30-statement Likert grid."""
-    answer, _ = _resolve(q_idx, defaults)
-    default_col = answer if isinstance(answer, str) else None
-    print(f"    Q{q_idx} [likert grid 30 rows]: "
-          f"{'all ' + default_col if default_col else 'randomized'}")
-
-    q_block = _get_question_block(page, page_idx)
-    if q_block is None:
-        # Fallback: search the whole page for the grid
-        grid = page.locator('[role="grid"]').first
-        if grid.count() > 0:
-            fill_likert_grid(page, grid, default_col)
-        else:
-            print(f"    ⚠  Could not locate Q{q_idx} Likert grid.")
-        return
-
-    fill_likert_grid(page, q_block, default_col)
-
-
-# ── Navigation helpers ────────────────────────────────────────────────────────
-
-def _get_question_block(page: Page, page_relative_idx: int) -> Locator | None:
-    """
-    Return the Locator for the page_relative_idx-th question block on the
-    current page (0 = first question visible right now).
-
-    Google Forms wraps each question in a freebirdForm… div or [role="listitem"].
-    We try several selectors in priority order.
-    """
-    selectors = [
-        '.freebirdFormviewerViewItemsItemItem',
-        '.freebirdFormviewerComponentsQuestionBaseRoot',
-        '[role="listitem"]',
-    ]
-    for sel in selectors:
-        blocks = page.locator(sel)
-        cnt = blocks.count()
-        if cnt > page_relative_idx:
-            return blocks.nth(page_relative_idx)
+def _find_option_index(q_idx: int, answer_text: str) -> int | None:
+    """Map an answer label to its positional index within Q_OPTIONS[q_idx]."""
+    opts = Q_OPTIONS.get(q_idx, [])
+    answer_l = answer_text.lower().strip()
+    for i, opt in enumerate(opts):
+        if answer_l == opt.lower() or answer_l in opt.lower():
+            return i
     return None
 
 
+def get_question_blocks(page: Page) -> list[Locator]:
+    """
+    Return all 15 question blocks using div[data-params].
+    This is the most reliable selector for Google Forms — each question
+    container has a data-params attribute with its configuration.
+    """
+    blocks = page.locator('div[data-params]')
+    result = []
+    for i in range(blocks.count()):
+        result.append(blocks.nth(i))
+    return result
+
+
+# ── Answer functions ──────────────────────────────────────────────────────────
+
+def answer_radio_question(page: Page, block: Locator, q_idx: int, defaults: dict) -> None:
+    """Answer a single-choice radio question by clicking the correct option."""
+    want = _resolve(q_idx, defaults)
+    opts = Q_OPTIONS.get(q_idx, [])
+
+    # Determine which option index to click
+    if want:
+        idx = _find_option_index(q_idx, want)
+        if idx is None:
+            print(f"    Q{q_idx} [radio]: default '{want}' not found — randomizing")
+            idx = random.randint(0, len(opts) - 1) if opts else 0
+        else:
+            print(f"    Q{q_idx} [radio]: {want} → index {idx}")
+    else:
+        idx = random.randint(0, len(opts) - 1) if opts else 0
+        print(f"    Q{q_idx} [radio]: {opts[idx] if idx < len(opts) else '?'} → index {idx}")
+
+    # Click the radio within this specific question block
+    radios = block.locator('[role="radio"]')
+    count = radios.count()
+    if count == 0:
+        print(f"    ⚠  Q{q_idx}: no radios found in block!")
+        return
+    idx = min(idx, count - 1)
+    radios.nth(idx).click()
+    page.wait_for_timeout(200)
+
+
+def answer_checkbox_question(page: Page, block: Locator, q_idx: int, defaults: dict) -> None:
+    """Answer a multi-choice checkbox question."""
+    want = _resolve(q_idx, defaults)
+    opts = Q_OPTIONS.get(q_idx, [])
+
+    checkboxes = block.locator('[role="checkbox"]')
+    count = checkboxes.count()
+    if count == 0:
+        print(f"    ⚠  Q{q_idx}: no checkboxes found in block!")
+        return
+
+    # Determine which checkboxes to tick
+    if want:
+        chosen_labels = want if isinstance(want, list) else [want]
+        indices = []
+        for lbl in chosen_labels:
+            idx = _find_option_index(q_idx, lbl)
+            if idx is not None and idx < count:
+                indices.append(idx)
+        if not indices:
+            print(f"    Q{q_idx} [checkbox]: defaults not matched — randomizing")
+            indices = _random_checkbox_indices(opts, count)
+        else:
+            print(f"    Q{q_idx} [checkbox]: {chosen_labels} → indices {indices}")
+    else:
+        indices = _random_checkbox_indices(opts, count)
+        labels = [opts[i] if i < len(opts) else "?" for i in indices]
+        print(f"    Q{q_idx} [checkbox]: {labels} → indices {indices}")
+
+    for idx in indices:
+        checkboxes.nth(idx).click()
+        page.wait_for_timeout(100)
+
+
+def _random_checkbox_indices(opts: list, count: int) -> list[int]:
+    """Pick 1–3 random checkbox indices, avoiding 'None of the above'."""
+    # Exclude the last option if it's "None of the above"
+    valid = list(range(count))
+    if opts and "none" in opts[-1].lower():
+        valid = list(range(max(1, count - 1)))
+    num = random.randint(1, min(3, len(valid)))
+    return random.sample(valid, num)
+
+
+def answer_grid_question(page: Page, block: Locator, q_idx: int,
+                         defaults: dict) -> None:
+    """
+    Answer a grid/matrix question by clicking one radio per row.
+    
+    IMPORTANT: Google Forms grid blocks contain BOTH real radios and disabled
+    placeholder radios (aria-disabled="true", data-value=""). We must filter
+    to only the real, enabled ones.
+    """
+    # Filter: only radios that are NOT disabled placeholders
+    radios = block.locator('[role="radio"]:not([aria-disabled="true"])')
+    total = radios.count()
+
+    if total == 0:
+        # Fallback: try all radios
+        radios = block.locator('[role="radio"]')
+        total = radios.count()
+
+    if total == 0:
+        print(f"    ⚠  Q{q_idx}: no radios found in grid block!")
+        return
+
+    info = GRID_INFO.get(q_idx, {"rows": 5, "cols": 5})
+    num_cols = info["cols"]
+
+    # Infer actual number of rows from the enabled radios
+    num_rows = total // num_cols
+    if num_rows == 0:
+        print(f"    ⚠  Q{q_idx}: grid has {total} enabled radios, can't infer rows for {num_cols} cols")
+        return
+
+    print(f"    Q{q_idx} [grid {num_rows}×{num_cols}]: randomized ({total} enabled radios)")
+
+    for r in range(num_rows):
+        col = random.randint(0, num_cols - 1)
+        flat_idx = r * num_cols + col
+        if flat_idx < total:
+            radio = radios.nth(flat_idx)
+            try:
+                radio.scroll_into_view_if_needed(timeout=3000)
+                page.wait_for_timeout(50)
+                radio.click(timeout=5000)
+            except Exception as e:
+                print(f"      ⚠  row {r} col {col}: {e}")
+            # Shorter delay for large grids
+            if num_rows > 10:
+                page.wait_for_timeout(30)
+            else:
+                page.wait_for_timeout(60)
+
+
+# ── Form filler ───────────────────────────────────────────────────────────────
+
+def fill_form(page: Page, defaults: dict) -> None:
+    """Fill all 15 questions on the form, navigating between sections."""
+
+    page.wait_for_load_state("networkidle", timeout=20_000)
+    page.wait_for_timeout(1500)
+
+    blocks = get_question_blocks(page)
+    print(f"\n  Found {len(blocks)} question blocks (div[data-params])")
+
+    if len(blocks) < 15:
+        print(f"  ⚠  Expected 15 question blocks, found {len(blocks)}")
+
+    # Define which questions belong to each visual section
+    sections = [
+        ("Section A: Awareness",    [0, 1, 2, 3, 4]),
+        ("Section B: Preference",   [5, 6, 7, 8, 9]),
+        ("Section C: Perception",   [10]),
+        ("Section D: Demographics", [11, 12, 13, 14]),
+    ]
+
+    for sec_idx, (sec_name, q_indices) in enumerate(sections):
+        print(f"\n  ── {sec_name} ──")
+
+        for q_idx in q_indices:
+            if q_idx >= len(blocks):
+                print(f"    ⚠  No block for Q{q_idx}")
+                continue
+
+            block = blocks[q_idx]
+
+            # Scroll into view
+            try:
+                block.scroll_into_view_if_needed(timeout=5000)
+            except Exception:
+                pass
+            page.wait_for_timeout(150)
+
+            q_type = Q_TYPES.get(q_idx, "radio")
+
+            if q_type == "radio":
+                answer_radio_question(page, block, q_idx, defaults)
+            elif q_type == "checkbox":
+                answer_checkbox_question(page, block, q_idx, defaults)
+            elif q_type == "grid":
+                answer_grid_question(page, block, q_idx, defaults)
+
+        # After each section (except the last), click "Next"
+        if sec_idx < len(sections) - 1:
+            _click_next(page)
+
+    # Final: click Submit
+    _click_submit(page)
+
+
 def _click_next(page: Page) -> None:
-    """Click the Next button and wait for the next section to load."""
-    next_btn = page.locator(
-        'div[role="button"]:has-text("Next"), '
-        '[jsname="OCpkoe"], '
-        'button:has-text("Next")'
-    ).first
-    if next_btn.is_visible(timeout=5000):
-        next_btn.click()
+    """Click the 'Next' button if visible."""
+    try:
+        btn = page.locator(
+            'div[role="button"]:has-text("Next"), '
+            '[jsname="OCpkoe"]'
+        ).first
+        btn.scroll_into_view_if_needed(timeout=3000)
+        page.wait_for_timeout(200)
+        btn.click()
         page.wait_for_load_state("networkidle", timeout=15_000)
         page.wait_for_timeout(1000)
-    else:
-        print("    ⚠  Next button not found!")
+        print("  → Next")
+    except Exception as e:
+        # No Next button — form might show all sections at once
+        print(f"  (no Next button — continuing)")
 
 
 def _click_submit(page: Page) -> bool:
-    """Click Submit and verify confirmation."""
-    submit_btn = page.locator(
-        'div[role="button"]:has-text("Submit"), '
-        '[jsname="M2UYVd"], '
-        'button:has-text("Submit")'
-    ).first
-    if submit_btn.is_visible(timeout=5000):
-        submit_btn.click()
-        page.wait_for_timeout(2500)
-        # Check for confirmation
-        if ("formResponse" in page.url or
-                page.locator(':has-text("Your response has been recorded")').count() > 0 or
-                page.locator(':has-text("response was recorded")').count() > 0):
+    """Click 'Submit' and check for confirmation."""
+    try:
+        btn = page.locator(
+            'div[role="button"]:has-text("Submit"), '
+            '[jsname="M2UYVd"]'
+        ).first
+        btn.scroll_into_view_if_needed(timeout=3000)
+        page.wait_for_timeout(300)
+        btn.click()
+        page.wait_for_timeout(3000)
+        body = page.locator("body").inner_text(timeout=5000).lower()
+        if "recorded" in body or "submitted" in body:
             print("  ✅ Submitted successfully!")
             return True
         print("  ⚠  Submission may not have been confirmed.")
         return False
-    print("    ⚠  Submit button not found!")
-    return False
+    except Exception as e:
+        print(f"  ⚠  Submit: {e}")
+        return False
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def submit_response(page: Page, submission_num: int, total: int, defaults: dict) -> bool:
-    """Open the form, fill it out, and submit one response."""
+def submit_response(page: Page, num: int, total: int, defaults: dict) -> bool:
+    """Open the form, fill it, and submit."""
     print(f"\n{'─'*55}")
-    print(f"[{submission_num}/{total}] Opening form …")
+    print(f"[{num}/{total}] Opening form …")
     page.goto(FORM_URL, wait_until="domcontentloaded", timeout=30_000)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(2000)
 
     try:
-        fill_all_questions(page, defaults)
+        fill_form(page, defaults)
         return True
     except Exception as exc:
         print(f"  ❌ Error: {exc}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -527,7 +427,6 @@ def main() -> None:
     print(f"  Headless : {HEADLESS}")
     print("=" * 55)
 
-    # Prompt for number of responses
     while True:
         try:
             raw = input("\nEnter the number of responses to submit: ").strip()
@@ -573,10 +472,9 @@ def main() -> None:
             finally:
                 page.close()
 
-            # Pause between submissions
             if i < num_responses:
                 delay = random.uniform(2.0, 4.5)
-                print(f"  ⏳ Waiting {delay:.1f}s before next submission …")
+                print(f"  ⏳ Waiting {delay:.1f}s …")
                 time.sleep(delay)
 
         browser.close()
