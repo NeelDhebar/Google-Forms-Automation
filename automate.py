@@ -151,22 +151,48 @@ def load_defaults() -> dict:
 
 
 def pick_radio_option(page: Page, options: Locator, want: str | None) -> None:
-    """Click a radio option — by label match if want is given, else random."""
+    """Click a radio option — by label match if want is given, else random.
+
+    Tries multiple strategies to read the option label since Google Forms
+    nests the text several DOM levels away from the [role="radio"] element.
+    """
     count = options.count()
     if count == 0:
         return
+
     if want:
         for i in range(count):
+            opt = options.nth(i)
+            label = ""
+
+            # Strategy 1: aria-label attribute on the radio element itself
             try:
-                # The label text lives in the parent container
-                parent = options.nth(i).locator("xpath=..")
-                label = parent.inner_text(timeout=2000).strip()
+                label = opt.get_attribute("aria-label") or ""
             except Exception:
-                label = ""
+                pass
+
+            # Strategy 2: data-value attribute
+            if not label:
+                try:
+                    label = opt.get_attribute("data-value") or ""
+                except Exception:
+                    pass
+
+            # Strategy 3: walk up ancestors (parent → grandparent → great-grandparent)
+            for xpath in ("xpath=..", "xpath=../..", "xpath=../../.."):
+                if label:
+                    break
+                try:
+                    label = opt.locator(xpath).inner_text(timeout=1000).strip()
+                except Exception:
+                    pass
+
             if want.lower() in label.lower():
-                options.nth(i).click()
+                opt.click()
                 return
-        print(f"    ⚠  '{want}' not found; randomizing.")
+
+        print(f"    ⚠  '{want}' not found in radio labels; randomizing.")
+
     options.nth(random.randint(0, count - 1)).click()
 
 
@@ -263,41 +289,45 @@ def fill_all_questions(page: Page, defaults: dict) -> None:
     page.wait_for_timeout(1000)
 
     # ── SECTION A ─────────────────────────────────────────────────────────────
+    # Questions 0-4 appear on page 1; page-relative indices are 0,1,2,3,4
     print("\n  ── Section A: Awareness ──")
 
-    _answer_radio(page, 0, defaults)   # Q0
-    _answer_radio(page, 1, defaults)   # Q1
-    _answer_radio(page, 2, defaults)   # Q2
-    _answer_checkbox(page, 3, defaults)# Q3
-    _answer_radio(page, 4, defaults)   # Q4
+    _answer_radio(page, 0, defaults, page_idx=0)    # Q0
+    _answer_radio(page, 1, defaults, page_idx=1)    # Q1
+    _answer_radio(page, 2, defaults, page_idx=2)    # Q2
+    _answer_checkbox(page, 3, defaults, page_idx=3) # Q3
+    _answer_radio(page, 4, defaults, page_idx=4)    # Q4
 
     _click_next(page)
 
     # ── SECTION B ─────────────────────────────────────────────────────────────
+    # Questions 5-9 appear on page 2; page-relative indices restart at 0
     print("\n  ── Section B: Preference ──")
 
-    _answer_radio(page, 5, defaults)   # Q5
-    _answer_radio(page, 6, defaults)   # Q6
-    _answer_radio(page, 7, defaults)   # Q7
-    _answer_grid(page, 8, defaults)    # Q8  — ranking grid
-    _answer_grid(page, 9, defaults)    # Q9  — ranking grid
+    _answer_radio(page, 5, defaults, page_idx=0)    # Q5
+    _answer_radio(page, 6, defaults, page_idx=1)    # Q6
+    _answer_radio(page, 7, defaults, page_idx=2)    # Q7
+    _answer_grid(page, 8, defaults, page_idx=3)     # Q8 — ranking grid
+    _answer_grid(page, 9, defaults, page_idx=4)     # Q9 — ranking grid
 
     _click_next(page)
 
     # ── SECTION C ─────────────────────────────────────────────────────────────
+    # Question 10 is the only one on page 3; page-relative index = 0
     print("\n  ── Section C: Perception Likert ──")
 
-    _answer_likert(page, 10, defaults) # Q10
+    _answer_likert(page, 10, defaults, page_idx=0)  # Q10
 
     _click_next(page)
 
     # ── SECTION D ─────────────────────────────────────────────────────────────
+    # Questions 11-14 appear on page 4; page-relative indices 0-3
     print("\n  ── Section D: Demographics ──")
 
-    _answer_radio(page, 11, defaults)  # Q11
-    _answer_radio(page, 12, defaults)  # Q12
-    _answer_radio(page, 13, defaults)  # Q13
-    _answer_radio(page, 14, defaults)  # Q14
+    _answer_radio(page, 11, defaults, page_idx=0)   # Q11
+    _answer_radio(page, 12, defaults, page_idx=1)   # Q12
+    _answer_radio(page, 13, defaults, page_idx=2)   # Q13
+    _answer_radio(page, 14, defaults, page_idx=3)   # Q14
 
     _click_submit(page)
 
@@ -314,16 +344,13 @@ def _resolve(q_idx: int, defaults: dict):
     return answer, force_random
 
 
-def _answer_radio(page: Page, q_idx: int, defaults: dict) -> None:
+def _answer_radio(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
     answer, _ = _resolve(q_idx, defaults)
     pool = ANSWER_POOLS.get(q_idx, [])
     want = answer if answer else (random.choice(pool) if pool else None)
     print(f"    Q{q_idx} [radio]: {want}")
 
-    # Locate all radio buttons on the page and find the right group
-    # Google Forms groups each question's radios by jsname or data-answer-value
-    # We identify the question by its index among visible question blocks.
-    q_block = _get_question_block(page, q_idx)
+    q_block = _get_question_block(page, page_idx)
     if q_block is None:
         print(f"    ⚠  Could not locate Q{q_idx} block.")
         return
@@ -333,7 +360,7 @@ def _answer_radio(page: Page, q_idx: int, defaults: dict) -> None:
     page.wait_for_timeout(150)
 
 
-def _answer_checkbox(page: Page, q_idx: int, defaults: dict) -> None:
+def _answer_checkbox(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
     answer, _ = _resolve(q_idx, defaults)
     pool = ANSWER_POOLS.get(q_idx, [])
 
@@ -348,7 +375,7 @@ def _answer_checkbox(page: Page, q_idx: int, defaults: dict) -> None:
 
     print(f"    Q{q_idx} [checkbox]: {chosen}")
 
-    q_block = _get_question_block(page, q_idx)
+    q_block = _get_question_block(page, page_idx)
     if q_block is None:
         print(f"    ⚠  Could not locate Q{q_idx} block.")
         return
@@ -356,22 +383,36 @@ def _answer_checkbox(page: Page, q_idx: int, defaults: dict) -> None:
     checkboxes = q_block.locator('[role="checkbox"]')
     count = checkboxes.count()
     for i in range(count):
+        cb = checkboxes.nth(i)
+        label = ""
+        # Try aria-label, data-value, then ancestor text (same as radio logic)
         try:
-            parent = checkboxes.nth(i).locator("xpath=..")
-            label = parent.inner_text(timeout=2000).strip()
+            label = cb.get_attribute("aria-label") or ""
         except Exception:
-            label = ""
+            pass
+        if not label:
+            try:
+                label = cb.get_attribute("data-value") or ""
+            except Exception:
+                pass
+        for xpath in ("xpath=..", "xpath=../..", "xpath=../../.."):
+            if label:
+                break
+            try:
+                label = cb.locator(xpath).inner_text(timeout=1000).strip()
+            except Exception:
+                pass
         if any(c.lower() in label.lower() for c in chosen):
             checkboxes.nth(i).click()
             page.wait_for_timeout(100)
 
 
-def _answer_grid(page: Page, q_idx: int, defaults: dict) -> None:
+def _answer_grid(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
     """Fill a ranking grid question."""
     answer, _ = _resolve(q_idx, defaults)
     print(f"    Q{q_idx} [ranking grid]: randomized per row")
 
-    q_block = _get_question_block(page, q_idx)
+    q_block = _get_question_block(page, page_idx)
     if q_block is None:
         print(f"    ⚠  Could not locate Q{q_idx} block.")
         return
@@ -380,14 +421,14 @@ def _answer_grid(page: Page, q_idx: int, defaults: dict) -> None:
     fill_ranking_grid(page, q_block, default_rows)
 
 
-def _answer_likert(page: Page, q_idx: int, defaults: dict) -> None:
+def _answer_likert(page: Page, q_idx: int, defaults: dict, page_idx: int) -> None:
     """Fill the 30-statement Likert grid."""
     answer, _ = _resolve(q_idx, defaults)
     default_col = answer if isinstance(answer, str) else None
     print(f"    Q{q_idx} [likert grid 30 rows]: "
           f"{'all ' + default_col if default_col else 'randomized'}")
 
-    q_block = _get_question_block(page, q_idx)
+    q_block = _get_question_block(page, page_idx)
     if q_block is None:
         # Fallback: search the whole page for the grid
         grid = page.locator('[role="grid"]').first
@@ -402,12 +443,14 @@ def _answer_likert(page: Page, q_idx: int, defaults: dict) -> None:
 
 # ── Navigation helpers ────────────────────────────────────────────────────────
 
-def _get_question_block(page: Page, q_idx: int) -> Locator | None:
+def _get_question_block(page: Page, page_relative_idx: int) -> Locator | None:
     """
-    Return the Locator for the q_idx-th question block on the current page.
-    Google Forms wraps each question in a [role="listitem"] or a freebirdForm… div.
+    Return the Locator for the page_relative_idx-th question block on the
+    current page (0 = first question visible right now).
+
+    Google Forms wraps each question in a freebirdForm… div or [role="listitem"].
+    We try several selectors in priority order.
     """
-    # Primary selector used by modern Google Forms
     selectors = [
         '.freebirdFormviewerViewItemsItemItem',
         '.freebirdFormviewerComponentsQuestionBaseRoot',
@@ -415,8 +458,9 @@ def _get_question_block(page: Page, q_idx: int) -> Locator | None:
     ]
     for sel in selectors:
         blocks = page.locator(sel)
-        if blocks.count() > q_idx:
-            return blocks.nth(q_idx)
+        cnt = blocks.count()
+        if cnt > page_relative_idx:
+            return blocks.nth(page_relative_idx)
     return None
 
 
